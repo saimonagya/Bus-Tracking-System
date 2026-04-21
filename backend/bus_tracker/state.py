@@ -1,135 +1,103 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from math import floor
-from secrets import token_hex
+import json
+from datetime import datetime
+from math import atan2, cos, radians, sin, sqrt
 
-from .models import Coordinate, Seat, Waypoint
+from .models import Coordinate
 
 
-ROUTE_WAYPOINTS = [
-    Waypoint(name="Gangtok", coordinate=Coordinate(lat=27.3314, lng=88.6138), fare=0),
-    Waypoint(name="Tadong", coordinate=Coordinate(lat=27.3101, lng=88.6004), fare=15),
-    Waypoint(name="6th Mile", coordinate=Coordinate(lat=27.2994, lng=88.5947), fare=10),
-    Waypoint(name="Boomtar", coordinate=Coordinate(lat=27.2872, lng=88.5875), fare=12),
-    Waypoint(name="Singtam Turn", coordinate=Coordinate(lat=27.2785, lng=88.5824), fare=10),
-    Waypoint(name="Ranipool", coordinate=Coordinate(lat=27.2698, lng=88.5761), fare=13),
+DEFAULT_ROUTE_NAME = "Gangtok → Ranipool"
+
+ROUTE_STOPS = [
+    {"name": "Gangtok", "lat": 27.3389, "lng": 88.6065, "fare": 0},
+    {"name": "Tadong", "lat": 27.3086, "lng": 88.5989, "fare": 15},
+    {"name": "6th Mile", "lat": 27.3008, "lng": 88.5934, "fare": 10},
+    {"name": "Boomtar", "lat": 27.2916, "lng": 88.5881, "fare": 12},
+    {"name": "Singtam Turn", "lat": 27.2814, "lng": 88.5814, "fare": 10},
+    {"name": "Ranipool", "lat": 27.2749, "lng": 88.5792, "fare": 13},
 ]
 
-DISPLAY_FARES = [
-    Waypoint(name="Tadong", coordinate=ROUTE_WAYPOINTS[1].coordinate, fare=15),
-    Waypoint(name="6th Mile", coordinate=ROUTE_WAYPOINTS[2].coordinate, fare=10),
-    Waypoint(name="Boomtar", coordinate=ROUTE_WAYPOINTS[3].coordinate, fare=12),
-    Waypoint(name="Singtam Turn", coordinate=ROUTE_WAYPOINTS[4].coordinate, fare=10),
-    Waypoint(name="Ranipool", coordinate=ROUTE_WAYPOINTS[5].coordinate, fare=13),
-    Waypoint(name="Full Route", coordinate=ROUTE_WAYPOINTS[5].coordinate, fare=60),
+FULL_ROUTE_FARE = 60
+
+ROUTE_POLYLINE = [
+    Coordinate(lat=27.3389, lng=88.6065),
+    Coordinate(lat=27.3349, lng=88.6056),
+    Coordinate(lat=27.3296, lng=88.6042),
+    Coordinate(lat=27.3238, lng=88.6024),
+    Coordinate(lat=27.3177, lng=88.6006),
+    Coordinate(lat=27.3123, lng=88.5994),
+    Coordinate(lat=27.3086, lng=88.5989),
+    Coordinate(lat=27.3054, lng=88.5967),
+    Coordinate(lat=27.3008, lng=88.5934),
+    Coordinate(lat=27.2965, lng=88.5908),
+    Coordinate(lat=27.2916, lng=88.5881),
+    Coordinate(lat=27.2869, lng=88.5848),
+    Coordinate(lat=27.2814, lng=88.5814),
+    Coordinate(lat=27.2781, lng=88.5801),
+    Coordinate(lat=27.2749, lng=88.5792),
 ]
 
-SEAT_LAYOUT = [
-    Seat(id="S1", label="S1", row=0, column="front", is_booked=False),
-    Seat(id="S2", label="S2", row=1, column="left", is_booked=False),
-    Seat(id="S3", label="S3", row=1, column="right", is_booked=False),
-    Seat(id="S4", label="S4", row=2, column="left", is_booked=False),
-    Seat(id="S5", label="S5", row=2, column="right", is_booked=False),
-    Seat(id="S6", label="S6", row=3, column="left", is_booked=False),
-    Seat(id="S7", label="S7", row=3, column="right", is_booked=False),
-    Seat(id="S8", label="S8", row=4, column="left", is_booked=False),
-    Seat(id="S9", label="S9", row=4, column="right", is_booked=False),
-    Seat(id="S10", label="S10", row=5, column="left", is_booked=False),
-    Seat(id="S11", label="S11", row=5, column="right", is_booked=False),
-    Seat(id="S12", label="S12", row=6, column="left", is_booked=False),
-    Seat(id="S13", label="S13", row=6, column="right", is_booked=False),
-    Seat(id="S14", label="S14", row=7, column="rear-1", is_booked=False),
-    Seat(id="S15", label="S15", row=7, column="rear-2", is_booked=False),
-    Seat(id="S16", label="S16", row=7, column="rear-3", is_booked=False),
-    Seat(id="S17", label="S17", row=7, column="rear-4", is_booked=False),
+SEAT_LAYOUT_TEMPLATE = [
+    ("S1", "S1", 0, "front"),
+    ("S2", "S2", 1, "left"),
+    ("S3", "S3", 1, "right"),
+    ("S4", "S4", 2, "left"),
+    ("S5", "S5", 2, "right"),
+    ("S6", "S6", 3, "left"),
+    ("S7", "S7", 3, "right"),
+    ("S8", "S8", 4, "left"),
+    ("S9", "S9", 4, "right"),
+    ("S10", "S10", 5, "left"),
+    ("S11", "S11", 5, "right"),
+    ("S12", "S12", 6, "left"),
+    ("S13", "S13", 6, "right"),
+    ("S14", "S14", 7, "rear-1"),
+    ("S15", "S15", 7, "rear-2"),
+    ("S16", "S16", 7, "rear-3"),
+    ("S17", "S17", 7, "rear-4"),
 ]
 
 
-def interpolate_route() -> list[Coordinate]:
-    segments: list[Coordinate] = []
-    for start, end in zip(ROUTE_WAYPOINTS, ROUTE_WAYPOINTS[1:]):
-        steps = 10
-        for step in range(steps):
-            ratio = step / steps
-            segments.append(
-                Coordinate(
-                    lat=start.coordinate.lat + (end.coordinate.lat - start.coordinate.lat) * ratio,
-                    lng=start.coordinate.lng + (end.coordinate.lng - start.coordinate.lng) * ratio,
-                )
-            )
-    segments.append(ROUTE_WAYPOINTS[-1].coordinate)
-    return segments
+def default_route_polyline_json() -> str:
+    return json.dumps([point.model_dump() for point in ROUTE_POLYLINE])
 
 
-ROUTE_POINTS = interpolate_route()
+def parse_route_polyline(route_polyline_json: str) -> list[Coordinate]:
+    raw_points = json.loads(route_polyline_json)
+    return [Coordinate(**point) for point in raw_points]
 
 
-@dataclass
-class DemoState:
-    bus_name: str = "City Runner 17"
-    is_active: bool = True
-    seats: list[Seat] = field(default_factory=lambda: [seat.model_copy(deep=True) for seat in SEAT_LAYOUT])
-    route_points: list[Coordinate] = field(default_factory=lambda: [point.model_copy(deep=True) for point in ROUTE_POINTS])
-    driver_tokens: set[str] = field(default_factory=set)
-    progress_index: int = 0
-    last_tick: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+def haversine_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    earth_radius = 6371.0
+    d_lat = radians(lat2 - lat1)
+    d_lng = radians(lng2 - lng1)
+    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lng / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return earth_radius * c
 
-    def tick(self) -> None:
-        if not self.is_active:
-            self.last_tick = datetime.now(timezone.utc)
-            return
-        now = datetime.now(timezone.utc)
-        elapsed = now - self.last_tick
-        step_count = floor(elapsed.total_seconds() / 3)
-        if step_count <= 0:
-            return
-        self.progress_index = min(self.progress_index + step_count, len(self.route_points) - 1)
-        self.last_tick = self.last_tick + timedelta(seconds=step_count * 3)
 
-    def current_position(self) -> Coordinate:
-        self.tick()
-        return self.route_points[self.progress_index]
+def estimate_eta_minutes(current_lat: float, current_lng: float, destination_lat: float, destination_lng: float) -> int:
+    distance = haversine_distance_km(current_lat, current_lng, destination_lat, destination_lng)
+    average_speed_kmh = 22
+    if distance <= 0.2:
+        return 1
+    return max(1, round((distance / average_speed_kmh) * 60))
 
-    def current_stop_index(self) -> int:
-        self.tick()
-        if self.progress_index >= len(self.route_points) - 1:
-            return len(ROUTE_WAYPOINTS) - 1
-        segment_length = max(1, len(self.route_points) // (len(ROUTE_WAYPOINTS) - 1))
-        return min(self.progress_index // segment_length, len(ROUTE_WAYPOINTS) - 1)
 
-    def eta_minutes(self) -> int:
-        self.tick()
-        remaining = (len(self.route_points) - 1) - self.progress_index
-        return max(1, (remaining * 3) // 60 + 1) if self.is_active else 0
+def get_current_stop_index(current_lat: float, current_lng: float, stops: list[tuple[float, float]]) -> int:
+    nearest_index = 0
+    nearest_distance = float("inf")
+    for index, (stop_lat, stop_lng) in enumerate(stops):
+        distance = haversine_distance_km(current_lat, current_lng, stop_lat, stop_lng)
+        if distance < nearest_distance:
+            nearest_distance = distance
+            nearest_index = index
+    return nearest_index
 
-    def toggle_seat(self, seat_id: str) -> bool:
-        for seat in self.seats:
-            if seat.id == seat_id:
-                seat.is_booked = not seat.is_booked
-                return True
+
+def location_is_fresh(location_updated_at: datetime | None, threshold_minutes: int = 3) -> bool:
+    if location_updated_at is None:
         return False
-
-    def reset_seats(self) -> None:
-        for seat in self.seats:
-            seat.is_booked = False
-
-    def toggle_bus(self) -> bool:
-        self.tick()
-        self.is_active = not self.is_active
-        self.last_tick = datetime.now(timezone.utc)
-        return self.is_active
-
-    def login(self, username: str, password: str) -> str | None:
-        if username == "driver" and password == "cityrunner123":
-            token = token_hex(16)
-            self.driver_tokens.add(token)
-            return token
-        return None
-
-    def is_driver_token_valid(self, token: str | None) -> bool:
-        return bool(token and token in self.driver_tokens)
-
-
-demo_state = DemoState()
+    now = datetime.utcnow()
+    return (now - location_updated_at).total_seconds() <= threshold_minutes * 60

@@ -29,11 +29,6 @@ body {
   font-family: "Segoe UI", system-ui, sans-serif;
 }
 
-.leaflet-container {
-  height: 100%;
-  width: 100%;
-}
-
-.leaflet-control-attribution {
+.ol-attribution {
   font-size: 10px;
 }
