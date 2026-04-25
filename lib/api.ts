@@ -62,6 +62,13 @@ export function login(username: string, password: string): Promise<LoginResponse
   });
 }
 
+export function logout(token: string): Promise<MutationResponse> {
+  return request<MutationResponse>("/api/auth/logout", {
+    method: "POST",
+    token
+  });
+}
+
 export function fetchCurrentUser(token: string): Promise<SessionUser> {
   return request<SessionUser>("/api/auth/me", { token });
 }

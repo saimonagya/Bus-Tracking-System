@@ -22,6 +22,7 @@ import {
   fetchDriverDashboard,
   fetchPublicBuses,
   login,
+  logout,
   removeDriver,
   resetDriverPassword,
   resetDriverSeats,
@@ -639,7 +640,16 @@ export function CityRunnerShell() {
     }
   };
 
-  const handleLogout = (role: Role) => {
+  const handleLogout = async (role: Role) => {
+    const token = role === "driver" ? driverToken : adminToken;
+    if (token) {
+      try {
+        await logout(token);
+      } catch {
+        // Local session cleanup still happens if the network is unavailable.
+      }
+    }
+
     if (role === "driver") {
       window.sessionStorage.removeItem(DRIVER_TOKEN_KEY);
       setDriverToken(null);
@@ -657,7 +667,7 @@ export function CityRunnerShell() {
         setMode("user");
       }
     }
-    showSuccess(`${role === "driver" ? "Driver" : "Admin"} session cleared.`);
+    showSuccess(`${role === "driver" ? "Driver" : "Admin"} session revoked.`);
   };
 
   const activeViewerLocation = mode === "driver" ? driverPhoneLocation : userLocation;

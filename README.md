@@ -22,11 +22,11 @@ Create a `.env.local` file in the project root if needed:
 ```bash
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 CITY_RUNNER_ADMIN_USERNAME=admin
-CITY_RUNNER_ADMIN_PASSWORD=change-this-before-running
+CITY_RUNNER_ADMIN_PASSWORD=cityrunner
 CITY_RUNNER_ADMIN_NAME=City Runner Admin
 ```
 
-The first admin account is created on backend startup only if no admin exists yet.
+The first admin account is created on backend startup only if no admin exists yet. If the admin env vars are not set, the backend falls back to `admin` / `cityrunner`.
 
 ## Run The Backend
 
@@ -34,7 +34,7 @@ The first admin account is created on backend startup only if no admin exists ye
 cd backend
 python -m pip install -r requirements.txt
 set CITY_RUNNER_ADMIN_USERNAME=admin
-set CITY_RUNNER_ADMIN_PASSWORD=change-this-before-running
+set CITY_RUNNER_ADMIN_PASSWORD=cityrunner
 set CITY_RUNNER_ADMIN_NAME=City Runner Admin
 python -m uvicorn main:app --reload --port 8000
 ```
@@ -43,7 +43,7 @@ On PowerShell, you can also use:
 
 ```powershell
 $env:CITY_RUNNER_ADMIN_USERNAME="admin"
-$env:CITY_RUNNER_ADMIN_PASSWORD="change-this-before-running"
+$env:CITY_RUNNER_ADMIN_PASSWORD="cityrunner"
 $env:CITY_RUNNER_ADMIN_NAME="City Runner Admin"
 python -m uvicorn main:app --reload --port 8000
 ```

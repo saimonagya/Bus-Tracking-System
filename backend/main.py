@@ -120,8 +120,8 @@ def ensure_seed_data() -> None:
             db.commit()
 
         admin_exists = db.scalar(select(User).where(User.role == "admin").limit(1))
-        admin_username = os.getenv("CITY_RUNNER_ADMIN_USERNAME")
-        admin_password = os.getenv("12345678")
+        admin_username = os.getenv("CITY_RUNNER_ADMIN_USERNAME", "admin")
+        admin_password = os.getenv("CITY_RUNNER_ADMIN_PASSWORD", "cityrunner")
         admin_name = os.getenv("CITY_RUNNER_ADMIN_NAME", "City Runner Admin")
         if admin_exists is None and admin_username and admin_password:
             password_hash, password_salt = create_password_record(admin_password)
@@ -302,6 +302,23 @@ def login(request: LoginRequest, db: DbSession) -> LoginResponse:
         token=token,
         user=build_user_session(user),
     )
+
+
+@app.post("/api/auth/logout", response_model=MutationResponse)
+def logout(
+    db: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> MutationResponse:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required.")
+
+    raw_token = authorization.removeprefix("Bearer ").strip()
+    session = db.scalar(select(AuthSession).where(AuthSession.token_hash == hash_session_token(raw_token)))
+    if session is not None:
+        db.delete(session)
+        db.commit()
+
+    return MutationResponse(success=True, message="Session revoked.")
 
 
 @app.post("/api/auth/change-password", response_model=MutationResponse)

@@ -52,11 +52,15 @@ Admin credentials are not hardcoded in the source.
 On backend startup:
 
 1. The app checks whether any admin user exists.
-2. If no admin exists, it looks for:
+2. If no admin exists, it reads:
    - `CITY_RUNNER_ADMIN_USERNAME`
    - `CITY_RUNNER_ADMIN_PASSWORD`
    - `CITY_RUNNER_ADMIN_NAME` optional
-3. If those environment variables are present, the backend creates the first admin account and stores only a salted password hash.
+3. If the environment variables are not set, the backend falls back to:
+   - username: `admin`
+   - password: `cityrunner`
+   - display name: `City Runner Admin`
+4. The backend creates the first admin account and stores only a salted password hash.
 
 ### Password storage
 
@@ -80,6 +84,8 @@ This is password hashing, not reversible encryption. That is the correct pattern
 4. Only the token hash is stored in `auth_sessions`.
 5. Frontend stores the plain token in `sessionStorage`.
 6. Future protected calls send `Authorization: Bearer <token>`.
+7. Driver or admin logs out using `/api/auth/logout`.
+8. Backend hashes the presented bearer token, deletes the matching `auth_sessions` row, and the frontend clears the local `sessionStorage` token.
 
 ## GPS / Live Location Flow
 
@@ -277,6 +283,7 @@ That means:
 ### Shared auth
 
 - `POST /api/auth/login`
+- `POST /api/auth/logout`
 - `GET /api/auth/me`
 - `POST /api/auth/change-password`
 
@@ -361,6 +368,7 @@ Check:
 
 - The system is now multi-bus and multi-role.
 - Passwords are securely hashed and salted.
+- Logout now revokes the active backend session instead of only clearing browser storage.
 - The database is SQLite for local/demo scale.
 - The route template is currently focused on Gangtok → Ranipool.
 - Full production-grade database encryption at rest is not implemented inside SQLite itself.
@@ -374,4 +382,4 @@ Check:
 2. Migrate from SQLite to PostgreSQL.
 3. Add route management so admin can define different stop sets and polylines.
 4. Add audit logs for admin actions.
-5. Add logout and session revocation endpoints.
+5. Add richer session/device management for viewing and revoking other active sessions.
