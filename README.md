@@ -4,7 +4,7 @@ City Runner is a multi-role bus tracking and seat management system for the Gang
 
 ## Stack
 
-- Frontend: Next.js App Router, Tailwind CSS, Leaflet
+- Frontend: Next.js App Router, Tailwind CSS, OpenLayers with OpenStreetMap tiles
 - Backend: FastAPI, SQLAlchemy, SQLite
 - Auth: database-backed admin and driver login
 - Password security: salted PBKDF2 password hashing

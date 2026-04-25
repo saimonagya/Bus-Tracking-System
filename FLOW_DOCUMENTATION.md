@@ -14,7 +14,8 @@ City Runner is now a multi-role bus tracking system with three user experiences:
 
 - `Next.js App Router`
 - `Tailwind CSS`
-- `Leaflet / react-leaflet`
+- `OpenLayers`
+- `OpenStreetMap tiles`
 - Main UI shell: [components/city-runner-shell.tsx](/c:/Users/saiim/OneDrive/Desktop/City_Runner/components/city-runner-shell.tsx)
 - Shared map: [components/route-map.tsx](/c:/Users/saiim/OneDrive/Desktop/City_Runner/components/route-map.tsx)
 
@@ -228,13 +229,13 @@ This was added specifically to prevent the UI from briefly showing `No buses fou
 
 ### Map rendering strategy
 
-The map component still loads client-side only because Leaflet depends on browser globals.
+The map component still loads client-side only because OpenLayers depends on browser globals.
 
 That means:
 
 - the shell is rendered first
 - the map card shows a loading area initially
-- the Leaflet map mounts after client-side rendering is ready
+- the OpenLayers map mounts after client-side rendering is ready
 
 ## Database Tables
 
@@ -373,7 +374,7 @@ Check:
 - The route template is currently focused on Gangtok → Ranipool.
 - Full production-grade database encryption at rest is not implemented inside SQLite itself.
 - There is no websocket layer yet; views refresh by polling.
-- The embedded map is Leaflet-based and styled as an inline app module, not Google Maps.
+- The embedded map is OpenLayers-based, uses OpenStreetMap tiles, and is styled as an inline app module. It is not Google Maps.
 - The app currently depends on polling plus client hydration rather than server-streamed live state.
 
 ## Suggested Next Scaling Steps
