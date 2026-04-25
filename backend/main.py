@@ -120,9 +120,15 @@ def ensure_seed_data() -> None:
             db.commit()
 
         admin_exists = db.scalar(select(User).where(User.role == "admin").limit(1))
-        admin_username = os.getenv("CITY_RUNNER_ADMIN_USERNAME", "admin")
-        admin_password = os.getenv("CITY_RUNNER_ADMIN_PASSWORD", "cityrunner")
+        admin_username = os.getenv("CITY_RUNNER_ADMIN_USERNAME")
+        admin_password = os.getenv("CITY_RUNNER_ADMIN_PASSWORD")
         admin_name = os.getenv("CITY_RUNNER_ADMIN_NAME", "City Runner Admin")
+        if admin_exists is None and (not admin_username or not admin_password):
+            raise RuntimeError(
+                "No admin account exists. Set CITY_RUNNER_ADMIN_USERNAME and "
+                "CITY_RUNNER_ADMIN_PASSWORD before starting the backend."
+            )
+
         if admin_exists is None and admin_username and admin_password:
             password_hash, password_salt = create_password_record(admin_password)
             db.add(

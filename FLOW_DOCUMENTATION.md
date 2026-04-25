@@ -57,10 +57,7 @@ On backend startup:
    - `CITY_RUNNER_ADMIN_USERNAME`
    - `CITY_RUNNER_ADMIN_PASSWORD`
    - `CITY_RUNNER_ADMIN_NAME` optional
-3. If the environment variables are not set, the backend falls back to:
-   - username: `admin`
-   - password: `cityrunner`
-   - display name: `City Runner Admin`
+3. If `CITY_RUNNER_ADMIN_USERNAME` or `CITY_RUNNER_ADMIN_PASSWORD` is missing and no admin exists yet, backend startup fails with a clear setup error.
 4. The backend creates the first admin account and stores only a salted password hash.
 
 ### Password storage

@@ -26,7 +26,7 @@ CITY_RUNNER_ADMIN_PASSWORD=cityrunner
 CITY_RUNNER_ADMIN_NAME=City Runner Admin
 ```
 
-The first admin account is created on backend startup only if no admin exists yet. If the admin env vars are not set, the backend falls back to `admin` / `cityrunner`.
+The first admin account is created on backend startup only if no admin exists yet. `CITY_RUNNER_ADMIN_USERNAME` and `CITY_RUNNER_ADMIN_PASSWORD` are required for that first startup; the backend does not create default admin credentials.
 
 ## Run The Backend
 
