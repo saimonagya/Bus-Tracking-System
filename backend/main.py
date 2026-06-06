@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 import os
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from bus_tracker.db import Base, SessionLocal, engine
 from bus_tracker.entities import AuthSession, Bus, BusStop, Seat, User
@@ -71,6 +72,11 @@ def get_db():
 DbSession = Annotated[Session, Depends(get_db)]
 
 
+@lru_cache(maxsize=64)
+def parse_route_polyline_cached(route_polyline_json: str) -> tuple[Coordinate, ...]:
+    return tuple(parse_route_polyline(route_polyline_json))
+
+
 def create_bus_bundle(db: Session, name: str, registration_number: str, route_name: str = DEFAULT_ROUTE_NAME) -> Bus:
     bus = Bus(
         name=name,
@@ -83,8 +89,8 @@ def create_bus_bundle(db: Session, name: str, registration_number: str, route_na
     db.add(bus)
     db.flush()
 
-    for order_index, stop in enumerate(ROUTE_STOPS):
-        db.add(
+    db.add_all(
+        [
             BusStop(
                 bus_id=bus.id,
                 name=stop["name"],
@@ -93,10 +99,12 @@ def create_bus_bundle(db: Session, name: str, registration_number: str, route_na
                 fare=stop["fare"],
                 order_index=order_index,
             )
-        )
+            for order_index, stop in enumerate(ROUTE_STOPS)
+        ]
+    )
 
-    for seat_code, label, row_number, column_name in SEAT_LAYOUT_TEMPLATE:
-        db.add(
+    db.add_all(
+        [
             Seat(
                 bus_id=bus.id,
                 seat_code=seat_code,
@@ -105,7 +113,9 @@ def create_bus_bundle(db: Session, name: str, registration_number: str, route_na
                 column_name=column_name,
                 is_booked=False,
             )
-        )
+            for seat_code, label, row_number, column_name in SEAT_LAYOUT_TEMPLATE
+        ]
+    )
 
     db.flush()
     return bus
@@ -161,8 +171,10 @@ def build_user_session(user: User) -> UserSessionResponse:
     )
 
 
-def build_driver_summary(user: User) -> DriverSummaryResponse:
-    assigned_bus_name = user.assigned_bus.name if user.assigned_bus else None
+def build_driver_summary(user: User, assigned_bus_name: str | None = None) -> DriverSummaryResponse:
+    if assigned_bus_name is None:
+        assigned_bus = user.assigned_bus
+        assigned_bus_name = assigned_bus.name if assigned_bus else None
     return DriverSummaryResponse(
         id=user.id,
         username=user.username,
@@ -175,8 +187,10 @@ def build_driver_summary(user: User) -> DriverSummaryResponse:
 
 
 def build_bus_response(bus: Bus) -> BusResponse:
-    route = parse_route_polyline(bus.route_polyline_json)
-    stops = [
+    route = list(parse_route_polyline_cached(bus.route_polyline_json))
+    bus_stops = list(bus.stops)
+    bus_seats = list(bus.seats)
+    stop_responses = [
         StopResponse(
             id=stop.id,
             name=stop.name,
@@ -184,30 +198,33 @@ def build_bus_response(bus: Bus) -> BusResponse:
             fare=stop.fare,
             order_index=stop.order_index,
         )
-        for stop in bus.stops
+        for stop in bus_stops
     ]
-    seats = [
-        SeatResponse(
-            id=seat.id,
-            seat_code=seat.seat_code,
-            label=seat.label,
-            row_number=seat.row_number,
-            column_name=seat.column_name,
-            is_booked=seat.is_booked,
+    seat_responses = []
+    available_seats = 0
+    for seat in bus_seats:
+        if not seat.is_booked:
+            available_seats += 1
+        seat_responses.append(
+            SeatResponse(
+                id=seat.id,
+                seat_code=seat.seat_code,
+                label=seat.label,
+                row_number=seat.row_number,
+                column_name=seat.column_name,
+                is_booked=seat.is_booked,
+            )
         )
-        for seat in bus.seats
-    ]
-    available_seats = sum(1 for seat in bus.seats if not seat.is_booked)
     assigned_driver = next((driver for driver in bus.drivers if driver.role == "driver"), None)
 
     current_stop_index = None
     eta_minutes = None
     position = None
-    if bus.last_lat is not None and bus.last_lng is not None:
+    if bus.last_lat is not None and bus.last_lng is not None and bus_stops:
         position = Coordinate(lat=bus.last_lat, lng=bus.last_lng)
-        stop_pairs = [(stop.lat, stop.lng) for stop in bus.stops]
+        stop_pairs = [(stop.lat, stop.lng) for stop in bus_stops]
         current_stop_index = get_current_stop_index(bus.last_lat, bus.last_lng, stop_pairs)
-        destination = bus.stops[-1]
+        destination = bus_stops[-1]
         eta_minutes = estimate_eta_minutes(bus.last_lat, bus.last_lng, destination.lat, destination.lng)
 
     return BusResponse(
@@ -224,9 +241,9 @@ def build_bus_response(bus: Bus) -> BusResponse:
         location_updated_at=bus.location_updated_at,
         position=position,
         route=route,
-        stops=stops,
-        seats=seats,
-        assigned_driver=build_driver_summary(assigned_driver) if assigned_driver else None,
+        stops=stop_responses,
+        seats=seat_responses,
+        assigned_driver=build_driver_summary(assigned_driver, bus.name) if assigned_driver else None,
     )
 
 
@@ -254,7 +271,7 @@ def require_authenticated_user(
     raw_token = authorization.removeprefix("Bearer ").strip()
     session = db.scalar(
         select(AuthSession)
-        .options(selectinload(AuthSession.user).selectinload(User.assigned_bus))
+        .options(joinedload(AuthSession.user).joinedload(User.assigned_bus))
         .where(AuthSession.token_hash == hash_session_token(raw_token))
     )
     if session is None:
@@ -288,11 +305,7 @@ def get_public_buses(db: DbSession) -> PublicOverviewResponse:
 
 @app.post("/api/auth/login", response_model=LoginResponse)
 def login(request: LoginRequest, db: DbSession) -> LoginResponse:
-    user = db.scalar(
-        select(User)
-        .options(selectinload(User.assigned_bus))
-        .where(User.username == request.username)
-    )
+    user = db.scalar(select(User).where(User.username == request.username))
     if user is None or not verify_password(request.password, user.password_salt, user.password_hash):
         return LoginResponse(success=False, message="Invalid username or password.")
     if not user.is_active:
@@ -423,10 +436,11 @@ def reset_driver_seats(
     if driver.assigned_bus_id is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No bus is assigned to this driver.")
 
-    seats = list(db.scalars(select(Seat).where(Seat.bus_id == driver.assigned_bus_id)))
-    for seat in seats:
-        seat.is_booked = False
-        db.add(seat)
+    db.execute(
+        update(Seat)
+        .where(Seat.bus_id == driver.assigned_bus_id, Seat.is_booked.is_(True))
+        .values(is_booked=False)
+    )
     db.commit()
     return MutationResponse(success=True, message="All seats reset to free.")
 
@@ -458,7 +472,7 @@ def get_admin_overview(
     drivers = list(
         db.scalars(
             select(User)
-            .options(selectinload(User.assigned_bus))
+            .options(joinedload(User.assigned_bus))
             .where(User.role == "driver")
             .order_by(User.id)
         )
