@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from bus_tracker.db import Base, SessionLocal, engine
@@ -55,10 +55,10 @@ app = FastAPI(title="City Runner Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 def get_db():
@@ -512,6 +512,14 @@ def create_driver(
         bus = db.scalar(select(Bus).where(Bus.id == request.assigned_bus_id))
         if bus is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assigned bus not found.")
+        existing_driver = db.scalar(
+            select(User).where(User.assigned_bus_id == request.assigned_bus_id, User.role == "driver")
+        )
+        if existing_driver is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This bus already has a driver assigned.",
+            )
 
     password_hash, password_salt = create_password_record(request.password)
     db.add(
@@ -545,6 +553,7 @@ def reset_driver_password(
     driver.password_hash = password_hash
     driver.password_salt = password_salt
     driver.must_change_password = True
+    db.execute(delete(AuthSession).where(AuthSession.user_id == driver.id))
     db.add(driver)
     db.commit()
     return MutationResponse(success=True, message="Driver password reset.")
@@ -564,6 +573,7 @@ def remove_driver(
     if driver is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Driver not found.")
 
+    db.execute(delete(AuthSession).where(AuthSession.user_id == driver.id))
     db.delete(driver)
     db.commit()
     return MutationResponse(success=True, message="Driver account removed.")

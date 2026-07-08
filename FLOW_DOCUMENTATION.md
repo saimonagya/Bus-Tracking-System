@@ -5,32 +5,33 @@
 City Runner is now a multi-role bus tracking system with three user experiences:
 
 - `User`: sees live buses on the Gangtok → Ranipool route, live seat availability, ETA, and the real Sikkim route map.
-- `Driver`: logs in on their phone, grants browser GPS permission, updates the assigned bus location from that phone, and manages seats for that bus.
+- `Driver`: logs in on their phone, grants GPS permission, updates the assigned bus location from that phone, and manages seats for that bus.
 - `Admin`: logs in with a bootstrap admin account, creates buses, provisions driver accounts, resets driver passwords, and monitors all live buses.
 
 ## Core Architecture
 
-### Frontend
+### Current folders
 
-- `Next.js App Router`
-- `Tailwind CSS`
-- `OpenLayers`
-- `OpenStreetMap tiles`
-- Main UI shell: [components/city-runner-shell.tsx](/c:/Users/saiim/OneDrive/Desktop/City_Runner/components/city-runner-shell.tsx)
-- Shared map: [components/route-map.tsx](/c:/Users/saiim/OneDrive/Desktop/City_Runner/components/route-map.tsx)
+- [backend](/c:/Users/saiim/OneDrive/Desktop/City_Runner/backend): FastAPI backend and SQLite-backed data model.
+- [cityrunner_app](/c:/Users/saiim/OneDrive/Desktop/City_Runner/cityrunner_app): active Flutter frontend.
+- The old root Next.js frontend files were removed because the current version uses Flutter.
 
-### Current frontend layout
+### Flutter App
 
-The UI no longer uses a full-page map background.
+- Flutter app folder: [cityrunner_app](/c:/Users/saiim/OneDrive/Desktop/City_Runner/cityrunner_app)
+- HTTP client: [cityrunner_app/lib/services/api_service.dart](/c:/Users/saiim/OneDrive/Desktop/City_Runner/cityrunner_app/lib/services/api_service.dart)
+- API repository: [cityrunner_app/lib/repositories/city_runner_repository.dart](/c:/Users/saiim/OneDrive/Desktop/City_Runner/cityrunner_app/lib/repositories/city_runner_repository.dart)
+- App state: [cityrunner_app/lib/providers/app_provider.dart](/c:/Users/saiim/OneDrive/Desktop/City_Runner/cityrunner_app/lib/providers/app_provider.dart)
+- Token storage: [cityrunner_app/lib/services/token_store.dart](/c:/Users/saiim/OneDrive/Desktop/City_Runner/cityrunner_app/lib/services/token_store.dart)
+- Screens include passenger home, tracking, read-only passenger seat view, driver dashboard, and admin dashboard.
 
-The current structure is:
+The Flutter app is now the active frontend. It calls the FastAPI backend with `Dio`, uses a small repository layer, manages state with `Provider` / `ChangeNotifier`, and stores driver/admin bearer tokens with `flutter_secure_storage`.
 
-1. sticky header with `User / Driver / Admin`
-2. top summary cards
-3. embedded live map card inside the content area
-4. lower operational cards like stops, fares, seats, and admin or driver controls
+Flutter backend URL selection:
 
-This embedded map card was added so the map behaves like a literal app module in the flow of the page rather than a decorative full-screen backdrop.
+- Flutter web, desktop, and iOS simulator default to `http://localhost:8000`
+- Android emulator defaults to `http://10.0.2.2:8000`
+- Physical phones should use `--dart-define=CITY_RUNNER_API_BASE_URL=http://YOUR-PC-IP:8000`
 
 ### Backend
 
@@ -80,10 +81,11 @@ This is password hashing, not reversible encryption. That is the correct pattern
 2. Backend verifies the hashed password.
 3. Backend creates a random session token.
 4. Only the token hash is stored in `auth_sessions`.
-5. Frontend stores the plain token in `sessionStorage`.
+5. The Flutter app stores the plain token with `flutter_secure_storage`.
 6. Future protected calls send `Authorization: Bearer <token>`.
 7. Driver or admin logs out using `/api/auth/logout`.
-8. Backend hashes the presented bearer token, deletes the matching `auth_sessions` row, and the frontend clears the local `sessionStorage` token.
+8. Backend hashes the presented bearer token, deletes the matching `auth_sessions` row, and the Flutter app clears its local token.
+9. In Flutter, a `401` response clears the affected token and redirects the driver/admin back to login.
 
 ## GPS / Live Location Flow
 
@@ -91,10 +93,10 @@ This is password hashing, not reversible encryption. That is the correct pattern
 
 This is the main live tracking flow:
 
-1. Driver opens the website on their phone.
+1. Driver opens the Flutter app on their phone.
 2. Driver logs into the `Driver` view.
-3. Browser asks for GPS permission.
-4. Frontend starts `navigator.geolocation.watchPosition(...)`.
+3. The mobile app asks for GPS permission.
+4. The Flutter app starts a `Geolocator` position stream.
 5. Each accepted position is sent to `/api/driver/location`.
 6. Backend updates the assigned bus:
    - `last_lat`
@@ -112,11 +114,11 @@ Users only:
 - view live bus positions
 - optionally share their own location locally for distance-to-bus calculations
 - see ETA and stop progress based on the driver-fed live coordinates
-- see the same live bus location on the embedded inline map card inside the UI
+- see the same live bus location in the Flutter tracking UI
 
-### Embedded map card behavior
+### Map behavior
 
-The inline map card is shared across:
+The Flutter map/tracking UI is shared across:
 
 - `User` view
 - `Driver` view
@@ -156,6 +158,13 @@ Admin creates a driver with:
 - initial password
 - optional bus assignment
 
+If a bus assignment is provided, the backend verifies:
+
+- the bus exists
+- no existing driver is already assigned to that bus
+
+This prevents two driver accounts from being assigned to the same bus.
+
 The initial password is hashed before storage.
 
 The new driver account is marked:
@@ -172,6 +181,13 @@ After reset:
 
 - the new password is hashed
 - `must_change_password` is set to `true` again
+- existing sessions for that driver are revoked, so the driver must log in again with the reset password
+
+### Remove a driver
+
+Admin can remove a driver account after confirming the admin password.
+
+Before deletion, the backend explicitly removes that driver's active sessions.
 
 ## Seat Management Flow
 
@@ -179,6 +195,7 @@ After reset:
 
 - can see seat map
 - cannot change seats
+- Flutter currently shows this as a read-only passenger seat view because there is no passenger booking endpoint yet.
 
 ### Driver
 
@@ -207,32 +224,6 @@ ETA is currently estimated by:
 2. applying a demo average road speed
 
 Current stop is estimated by nearest configured stop.
-
-## Frontend Loading And Rendering Flow
-
-### Initial page load
-
-To avoid flashing empty fallback content, the frontend now uses an explicit loading shell.
-
-The load sequence is:
-
-1. page shell renders
-2. client hydration completes
-3. frontend requests `/api/public/buses`
-4. skeleton placeholders remain visible while data is loading
-5. summary cards and the embedded map render once the first public bus payload is available
-
-This was added specifically to prevent the UI from briefly showing `No buses found` before hydration and the first successful API response.
-
-### Map rendering strategy
-
-The map component still loads client-side only because OpenLayers depends on browser globals.
-
-That means:
-
-- the shell is rendered first
-- the map card shows a loading area initially
-- the OpenLayers map mounts after client-side rendering is ready
 
 ## Database Tables
 
@@ -299,6 +290,7 @@ That means:
 - `POST /api/admin/buses`
 - `POST /api/admin/drivers`
 - `POST /api/admin/drivers/{driver_id}/reset-password`
+- `DELETE /api/admin/drivers/{driver_id}`
 
 ## Debugging Checklist
 
@@ -307,7 +299,7 @@ That means:
 Check:
 
 - driver account has an assigned bus
-- phone browser GPS permission is allowed
+- phone GPS permission is allowed
 - backend is reachable from the phone
 - `/api/driver/location` is returning success
 - `location_updated_at` changes in the database
@@ -336,43 +328,69 @@ Check:
 - seat toggle endpoint succeeds
 - frontend refreshes the public and driver/admin data after mutation
 
-### Frontend looks broken or stale in dev
+### Flutter app cannot reach the backend
 
 Check:
 
-- frontend dev server is actually running on `http://localhost:3000`
-- backend is running on `http://localhost:8000`
-- browser cache is cleared with a hard refresh
-- the `.next` cache is not corrupted
+- backend is running on port `8000`
+- Android emulator is using `http://10.0.2.2:8000`
+- Flutter web, iOS simulator, and desktop are using `http://localhost:8000`
+- physical phone is using `--dart-define=CITY_RUNNER_API_BASE_URL=http://YOUR-PC-IP:8000`
+- backend is bound to the LAN when testing from a physical phone
+- Android cleartext traffic and location permissions are present in the main manifest
+- iOS location and local-network permission text exists in `Info.plist`
+- `GET /api/public/buses` returns data from the backend
 
-If the Next.js dev server starts returning a 500 with webpack or module-runtime errors, fix it with:
+### Flutter dependency checks
+
+The Flutter app depends on `flutter_secure_storage`. After pulling these changes, run:
 
 ```powershell
-Get-Process node | Stop-Process -Force
-if (Test-Path .next) { Remove-Item -Recurse -Force .next }
-npm run dev
+cd cityrunner_app
+flutter pub get
+flutter analyze
 ```
 
-### Page shows loading placeholders for too long
+Current local verification:
 
-Check:
+- Flutter SDK installed at `C:\Users\saiim\development\flutter`
+- `C:\Users\saiim\development\flutter\bin` added to the user `PATH`
+- `flutter pub get` completed successfully
+- `flutter analyze` reports no issues
+- `flutter build web` completes successfully and writes `cityrunner_app/build/web`
 
-- `GET /api/public/buses` returns data from the backend
-- browser console does not show fetch failures
-- `NEXT_PUBLIC_API_BASE_URL` points to the running backend
-- the backend database already contains the seeded default bus
+Environment notes:
+
+- Android emulator/device builds still need Android Studio and the Android SDK installed.
+- Windows desktop plugin builds need Windows Developer Mode plus Visual Studio C++; Windows desktop is currently disabled with `flutter config --no-enable-windows-desktop` so mobile/web dependency checks work.
+- Flutter's web build currently emits WebAssembly dry-run warnings from `flutter_secure_storage_web`, but the normal JavaScript web build succeeds.
+
+If PowerShell still reports `flutter` as unrecognized after installation, the open terminal has not picked up the updated user `PATH` yet. Restart the terminal, or run:
+
+```powershell
+$env:Path = "$env:USERPROFILE\development\flutter\bin;$env:Path"
+flutter run -d chrome
+```
+
+You can also call Flutter directly:
+
+```powershell
+& "$env:USERPROFILE\development\flutter\bin\flutter.bat" run -d chrome
+```
 
 ## Current Scope and Honest Limitations
 
 - The system is now multi-bus and multi-role.
 - Passwords are securely hashed and salted.
-- Logout now revokes the active backend session instead of only clearing browser storage.
+- Logout now revokes the active backend session instead of only clearing local storage.
+- Flutter stores driver/admin tokens with `flutter_secure_storage` and redirects to login on expired sessions.
 - The database is SQLite for local/demo scale.
 - The route template is currently focused on Gangtok → Ranipool.
 - Full production-grade database encryption at rest is not implemented inside SQLite itself.
 - There is no websocket layer yet; views refresh by polling.
-- The embedded map is OpenLayers-based, uses OpenStreetMap tiles, and is styled as an inline app module. It is not Google Maps.
-- The app currently depends on polling plus client hydration rather than server-streamed live state.
+- The Flutter app imports `google_maps_flutter`; mobile map rendering still needs platform Maps API keys for real device builds.
+- Passenger booking is not implemented in the backend yet. Passengers can view seats, while drivers can mutate seat state.
+- The app currently depends on polling rather than server-streamed live state.
 
 ## Suggested Next Scaling Steps
 

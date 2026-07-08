@@ -1,6 +1,5 @@
-.next
-node_modules
 __pycache__
 *.pyc
+*.tmp
 .env.local
 backend/city_runner.db

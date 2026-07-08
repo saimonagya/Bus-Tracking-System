@@ -4,7 +4,7 @@ City Runner is a multi-role bus tracking and seat management system for the Gang
 
 ## Stack
 
-- Frontend: Next.js App Router, Tailwind CSS, OpenLayers with OpenStreetMap tiles
+- Mobile frontend: Flutter app in `cityrunner_app`, Dio, Provider, flutter_secure_storage
 - Backend: FastAPI, SQLAlchemy, SQLite
 - Auth: database-backed admin and driver login
 - Password security: salted PBKDF2 password hashing
@@ -15,12 +15,19 @@ City Runner is a multi-role bus tracking and seat management system for the Gang
 - `Driver`: logs in on their phone, shares live GPS, manages seats, and updates bus status
 - `Admin`: creates buses, provisions drivers, resets passwords, and monitors the fleet
 
+## Project Layout
+
+- `backend`: FastAPI app, SQLAlchemy models, SQLite database, auth/session logic, and REST endpoints
+- `cityrunner_app`: active Flutter frontend for passenger, driver, and admin flows
+- `FLOW_DOCUMENTATION.md`: detailed flow notes for auth, GPS tracking, seats, and admin operations
+
+The old root Next.js frontend has been removed. The Flutter app is now the frontend for the current version.
+
 ## First-Time Setup
 
-Create a `.env.local` file in the project root if needed:
+Use `.env.example` as a reference and set these environment variables before the first backend startup:
 
 ```bash
-NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 CITY_RUNNER_ADMIN_USERNAME=admin
 CITY_RUNNER_ADMIN_PASSWORD=cityrunner
 CITY_RUNNER_ADMIN_NAME=City Runner Admin
@@ -48,17 +55,52 @@ $env:CITY_RUNNER_ADMIN_NAME="City Runner Admin"
 python -m uvicorn main:app --reload --port 8000
 ```
 
-## Run The Frontend
+## Run The Flutter App
 
-```bash
-npm install
-npm run dev
-```
-
-Open:
+The Flutter app lives in:
 
 ```text
-http://localhost:3000
+cityrunner_app
+```
+
+Install dependencies and run it:
+
+```powershell
+cd cityrunner_app
+flutter pub get
+flutter run -d chrome
+```
+
+On this Windows machine, Flutter is installed at `C:\Users\saiim\development\flutter`
+and `C:\Users\saiim\development\flutter\bin` has been added to the user `PATH`.
+Restart open terminals/editors if `flutter` is still not recognized.
+
+If the current PowerShell terminal still says `flutter` is not recognized, use one of these:
+
+```powershell
+$env:Path = "$env:USERPROFILE\development\flutter\bin;$env:Path"
+flutter run -d chrome
+```
+
+```powershell
+& "$env:USERPROFILE\development\flutter\bin\flutter.bat" run -d chrome
+```
+
+Backend URL behavior:
+
+- Flutter web, desktop, and iOS simulator default to `http://localhost:8000`
+- Android emulator defaults to `http://10.0.2.2:8000`
+- Physical phones should pass your computer's LAN IP:
+
+```powershell
+flutter run --dart-define=CITY_RUNNER_API_BASE_URL=http://YOUR-PC-IP:8000
+```
+
+When testing from a physical phone, start the backend on the LAN from the `backend` directory:
+
+```powershell
+cd ..\backend
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ## Current Features
@@ -66,24 +108,31 @@ http://localhost:3000
 - Real Sikkim route map for Gangtok → Ranipool
 - Driver phone GPS becomes the live bus location source
 - User, driver, and admin map views
-- Embedded inline live-map card inside the app layout instead of a full background map
+- Flutter passenger, driver, and admin screens wired to the FastAPI backend
 - Database-backed buses, drivers, seats, and sessions
+- Bearer session tokens stored securely in Flutter with `flutter_secure_storage`
+- Flutter redirects driver/admin users back to login when a session expires
 - Admin-managed driver onboarding and password reset
+- Admin password reset and driver removal revoke that driver's active sessions
+- Backend prevents assigning the same bus to more than one driver
 - Driver self-service password change
-- Loading skeletons while the frontend waits for the first bus payload
 
-## If The Frontend Looks Broken In Dev
+## Verification
 
-If `localhost:3000` starts showing a broken dev page or a stale 500, clear the Next.js cache and restart:
+These checks passed locally after the Flutter setup:
 
 ```powershell
-Get-Process node | Stop-Process -Force
-if (Test-Path .next) { Remove-Item -Recurse -Force .next }
-npm run dev
+cd cityrunner_app
+flutter pub get
+flutter analyze
+flutter build web
 ```
 
-Then do a hard refresh in the browser:
+## Current Limitations
 
-```text
-Ctrl + Shift + R
-```
+- Passenger booking is not implemented in the backend yet. Passengers can view seats; drivers can toggle seat status.
+- Flutter mobile map rendering uses `google_maps_flutter`, so real mobile builds may need platform Maps API keys.
+- Android emulator/device builds still need Android Studio and the Android SDK installed.
+- Windows desktop plugin builds need Windows Developer Mode plus Visual Studio C++; Windows desktop is currently disabled with `flutter config --no-enable-windows-desktop` so `flutter pub get` can run for mobile/web work.
+- `flutter pub get`, `flutter analyze`, and `flutter build web` pass with Flutter `3.44.5`.
+- Flutter's web build currently emits WebAssembly dry-run warnings from `flutter_secure_storage_web`, but the normal JavaScript web build succeeds.
