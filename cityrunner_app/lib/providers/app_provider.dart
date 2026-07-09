@@ -2,19 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/utils/geo_utils.dart';
 import '../models/city_runner_models.dart';
-import '../repositories/city_runner_repository.dart';
-import '../services/api_service.dart';
-import '../services/token_store.dart';
+import '../repositories/city_runner_repository_base.dart';
 
 class AppProvider extends ChangeNotifier {
-  AppProvider(this._repository, {TokenStore? tokenStore}) : _tokenStore = tokenStore ?? TokenStore();
+  AppProvider(this._repository);
 
-  final CityRunnerRepository _repository;
-  final TokenStore _tokenStore;
+  final CityRunnerRepositoryBase _repository;
 
   List<BusState> publicBuses = const [];
   DriverDashboard? driverDashboard;
@@ -29,7 +27,6 @@ class AppProvider extends ChangeNotifier {
   String? adminToken;
   String? errorMessage;
   String? successMessage;
-  UserRole? authRedirectRole;
   bool isLoading = true;
   String? busyAction;
 
@@ -44,10 +41,8 @@ class AppProvider extends ChangeNotifier {
       return driverDashboard!.bus;
     }
     final buses = visibleBuses;
-    for (final bus in buses) {
-      if (bus.id == selectedBusId) return bus;
-    }
-    return buses.isEmpty ? null : buses.first;
+    return buses.where((bus) => bus.id == selectedBusId).firstOrNull ??
+        (buses.isEmpty ? null : buses.first);
   }
 
   List<BusState> get visibleBuses {
@@ -66,8 +61,9 @@ class AppProvider extends ChangeNotifier {
   Future<void> bootstrap() async {
     isLoading = true;
     notifyListeners();
-    driverToken = await _tokenStore.readDriverToken();
-    adminToken = await _tokenStore.readAdminToken();
+    final prefs = await SharedPreferences.getInstance();
+    driverToken = prefs.getString(AppConstants.driverTokenKey);
+    adminToken = prefs.getString(AppConstants.adminTokenKey);
     await Future.wait([
       refreshPublic(),
       _restoreDriverSession(),
@@ -78,58 +74,46 @@ class AppProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-Future<bool> login(
-  String username,
-  String password,
-  UserRole role,
-) async {
-  final success = await _guard('login', () async {
-    final result = await _repository.login(
-      username.trim(),
-      password,
-    );
+  Future<bool> login(String username, String password, UserRole role) async {
+    final success = await _guard('login', () async {
+      final result = await _repository.login(username.trim(), password);
 
-    if (!result.success ||
-        result.token == null ||
-        result.user == null) {
-      throw StateError(result.message);
-    }
-
-    if (result.user!.role != role) {
-      if (result.token != null) {
-        try {
-          await _repository.logout(result.token!);
-        } catch (_) {}
+      if (!result.success || result.token == null || result.user == null) {
+        throw StateError(result.message);
       }
-      throw StateError(
-        'These credentials belong to a ${roleToJson(result.user!.role)} account.',
-      );
-    }
 
-    if (role == UserRole.driver) {
-      driverToken = result.token;
-      driverUser = result.user;
-      selectedRole = UserRole.driver;
+      if (result.user!.role != role) {
+        throw StateError(
+          'These credentials belong to a ${roleToJson(result.user!.role)} account.',
+        );
+      }
 
-      await _tokenStore.saveDriverToken(result.token!);
+      final prefs = await SharedPreferences.getInstance();
 
-      await refreshDriver();
-      await startDriverLocationStream();
-    } else if (role == UserRole.admin) {
-      adminToken = result.token;
-      adminUser = result.user;
-      selectedRole = UserRole.admin;
+      if (role == UserRole.driver) {
+        driverToken = result.token;
+        driverUser = result.user;
+        selectedRole = UserRole.driver;
 
-      await _tokenStore.saveAdminToken(result.token!);
+        await prefs.setString(AppConstants.driverTokenKey, result.token!);
 
-      await refreshAdmin();
-    }
+        await refreshDriver();
+        await startDriverLocationStream();
+      } else if (role == UserRole.admin) {
+        adminToken = result.token;
+        adminUser = result.user;
+        selectedRole = UserRole.admin;
 
-    successMessage = result.message;
-  });
+        await prefs.setString(AppConstants.adminTokenKey, result.token!);
 
-  return success;
-}
+        await refreshAdmin();
+      }
+
+      successMessage = result.message;
+    });
+
+    return success;
+  }
 
   Future<void> refreshPublic() async {
     try {
@@ -149,10 +133,6 @@ Future<bool> login(
       driverUser = driverDashboard!.user;
       selectedBusId = driverDashboard!.bus?.id ?? selectedBusId;
     } catch (error) {
-      if (error is ApiUnauthorizedException) {
-        await _expireSession(UserRole.driver, error.message);
-        return;
-      }
       errorMessage = _readableError(error);
     }
     notifyListeners();
@@ -162,12 +142,10 @@ Future<bool> login(
     if (adminToken == null) return;
     try {
       adminOverview = await _repository.fetchAdminOverview(adminToken!);
-      selectedBusId ??= adminOverview!.buses.isEmpty ? null : adminOverview!.buses.first.id;
+      selectedBusId ??= adminOverview!.buses.isEmpty
+          ? null
+          : adminOverview!.buses.first.id;
     } catch (error) {
-      if (error is ApiUnauthorizedException) {
-        await _expireSession(UserRole.admin, error.message);
-        return;
-      }
       errorMessage = _readableError(error);
     }
     notifyListeners();
@@ -176,7 +154,10 @@ Future<bool> login(
   Future<void> locatePassenger() async {
     await _guard('locate-passenger', () async {
       final position = await _currentPosition();
-      passengerLocation = Coordinate(lat: position.latitude, lng: position.longitude);
+      passengerLocation = Coordinate(
+        lat: position.latitude,
+        lng: position.longitude,
+      );
       successMessage = 'Current location added.';
     });
   }
@@ -204,58 +185,73 @@ Future<bool> login(
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
       errorMessage = 'Driver GPS permission was denied.';
       notifyListeners();
       return;
     }
 
-    _driverLocationSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-      ),
-    ).listen((position) async {
-      driverPhoneLocation = Coordinate(lat: position.latitude, lng: position.longitude);
-      final last = _lastDriverPush;
-      if (last != null && DateTime.now().difference(last).inSeconds < 7) {
-        notifyListeners();
-        return;
-      }
-      try {
-        await _pushDriverLocation(position);
-      } catch (error) {
-        errorMessage = _readableError(error);
-      }
-      notifyListeners();
-    });
+    _driverLocationSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          ),
+        ).listen((position) async {
+          driverPhoneLocation = Coordinate(
+            lat: position.latitude,
+            lng: position.longitude,
+          );
+          final last = _lastDriverPush;
+          if (last != null && DateTime.now().difference(last).inSeconds < 7) {
+            notifyListeners();
+            return;
+          }
+          try {
+            await _pushDriverLocation(position);
+          } catch (error) {
+            errorMessage = _readableError(error);
+          }
+          notifyListeners();
+        });
   }
 
-  Future<bool> toggleSeat(int seatId) async {
-    return _mutate('seat-$seatId', () => _repository.toggleDriverSeat(driverToken!, seatId));
+  Future<void> toggleSeat(int seatId) async {
+    await _mutate(
+      'seat-$seatId',
+      () => _repository.toggleDriverSeat(driverToken!, seatId),
+    );
   }
 
-  Future<bool> resetSeats() async {
-    return _mutate('reset-seats', () => _repository.resetDriverSeats(driverToken!));
+  Future<void> resetSeats() async {
+    await _mutate(
+      'reset-seats',
+      () => _repository.resetDriverSeats(driverToken!),
+    );
   }
 
-  Future<bool> toggleBusStatus() async {
-    return _mutate('toggle-bus', () => _repository.toggleDriverBus(driverToken!));
+  Future<void> toggleBusStatus() async {
+    await _mutate(
+      'toggle-bus',
+      () => _repository.toggleDriverBus(driverToken!),
+    );
   }
 
-  Future<bool> changePassword(String currentPassword, String newPassword) async {
+  Future<void> changePassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
     final token = selectedRole == UserRole.driver ? driverToken : adminToken;
-    if (token == null) return false;
-    return _guard('change-password', () async {
-      final result = await _repository.changePassword(token, currentPassword, newPassword);
+    if (token == null) return;
+    await _guard('change-password', () async {
+      final result = await _repository.changePassword(
+        token,
+        currentPassword,
+        newPassword,
+      );
       if (selectedRole == UserRole.driver && driverUser != null) {
         driverUser = driverUser!.copyWith(mustChangePassword: false);
-        if (driverDashboard != null) {
-          driverDashboard = DriverDashboard(
-            user: driverDashboard!.user.copyWith(mustChangePassword: false),
-            bus: driverDashboard!.bus,
-          );
-        }
       }
       if (selectedRole == UserRole.admin && adminUser != null) {
         adminUser = adminUser!.copyWith(mustChangePassword: false);
@@ -264,53 +260,72 @@ Future<bool> login(
     });
   }
 
-  Future<bool> createBus(String name, String registrationNumber, String routeName) async {
-    return _mutate('create-bus', () => _repository.createBus(adminToken!, name, registrationNumber, routeName));
-  }
-
-  Future<bool> createDriver(String username, String displayName, String password, int? assignedBusId) async {
-    return _mutate(
-      'create-driver',
-      () => _repository.createDriver(adminToken!, username, displayName, password, assignedBusId),
+  Future<void> createBus(
+    String name,
+    String registrationNumber,
+    String routeName,
+  ) async {
+    await _mutate(
+      'create-bus',
+      () => _repository.createBus(
+        adminToken!,
+        name,
+        registrationNumber,
+        routeName,
+      ),
     );
   }
 
-  Future<bool> resetDriverPassword(int driverId, String newPassword) async {
-    return _mutate('reset-driver-password', () => _repository.resetDriverPassword(adminToken!, driverId, newPassword));
+  Future<void> createDriver(
+    String username,
+    String displayName,
+    String password,
+    int? assignedBusId,
+  ) async {
+    await _mutate(
+      'create-driver',
+      () => _repository.createDriver(
+        adminToken!,
+        username,
+        displayName,
+        password,
+        assignedBusId,
+      ),
+    );
   }
 
-  Future<bool> removeDriver(int driverId, String adminPassword) async {
-    return _mutate('remove-driver', () => _repository.removeDriver(adminToken!, driverId, adminPassword));
+  Future<void> resetDriverPassword(int driverId, String newPassword) async {
+    await _mutate(
+      'reset-driver-password',
+      () => _repository.resetDriverPassword(adminToken!, driverId, newPassword),
+    );
+  }
+
+  Future<void> removeDriver(int driverId, String adminPassword) async {
+    await _mutate(
+      'remove-driver',
+      () => _repository.removeDriver(adminToken!, driverId, adminPassword),
+    );
   }
 
   Future<void> logout(UserRole role) async {
+    final prefs = await SharedPreferences.getInstance();
     if (role == UserRole.driver) {
-      final token = driverToken;
-      if (token != null) {
-        try {
-          await _repository.logout(token);
-        } catch (_) {}
-      }
-      await _tokenStore.clearDriverToken();
+      await prefs.remove(AppConstants.driverTokenKey);
       await _driverLocationSubscription?.cancel();
       driverToken = null;
       driverUser = null;
       driverDashboard = null;
       if (selectedRole == UserRole.driver) selectedRole = UserRole.passenger;
     } else if (role == UserRole.admin) {
-      final token = adminToken;
-      if (token != null) {
-        try {
-          await _repository.logout(token);
-        } catch (_) {}
-      }
-      await _tokenStore.clearAdminToken();
+      await prefs.remove(AppConstants.adminTokenKey);
       adminToken = null;
       adminUser = null;
       adminOverview = null;
       if (selectedRole == UserRole.admin) selectedRole = UserRole.passenger;
     }
-    successMessage = '${role == UserRole.driver ? 'Driver' : 'Admin'} session cleared.';
+    successMessage =
+        '${role == UserRole.driver ? 'Driver' : 'Admin'} session cleared.';
     notifyListeners();
   }
 
@@ -330,12 +345,6 @@ Future<bool> login(
     notifyListeners();
   }
 
-  UserRole? consumeAuthRedirect() {
-    final role = authRedirectRole;
-    authRedirectRole = null;
-    return role;
-  }
-
   Future<void> _restoreDriverSession() async {
     if (driverToken == null) return;
     try {
@@ -343,7 +352,8 @@ Future<bool> login(
       await refreshDriver();
       await startDriverLocationStream();
     } catch (_) {
-      await _tokenStore.clearDriverToken();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(AppConstants.driverTokenKey);
       driverToken = null;
     }
   }
@@ -354,7 +364,8 @@ Future<bool> login(
       adminUser = await _repository.fetchCurrentUser(adminToken!);
       await refreshAdmin();
     } catch (_) {
-      await _tokenStore.clearAdminToken();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(AppConstants.adminTokenKey);
       adminToken = null;
     }
   }
@@ -363,9 +374,18 @@ Future<bool> login(
     _publicTimer?.cancel();
     _driverTimer?.cancel();
     _adminTimer?.cancel();
-    _publicTimer = Timer.periodic(const Duration(seconds: AppConstants.publicPollSeconds), (_) => refreshPublic());
-    _driverTimer = Timer.periodic(const Duration(seconds: AppConstants.driverPollSeconds), (_) => refreshDriver());
-    _adminTimer = Timer.periodic(const Duration(seconds: AppConstants.adminPollSeconds), (_) => refreshAdmin());
+    _publicTimer = Timer.periodic(
+      const Duration(seconds: AppConstants.publicPollSeconds),
+      (_) => refreshPublic(),
+    );
+    _driverTimer = Timer.periodic(
+      const Duration(seconds: AppConstants.driverPollSeconds),
+      (_) => refreshDriver(),
+    );
+    _adminTimer = Timer.periodic(
+      const Duration(seconds: AppConstants.adminPollSeconds),
+      (_) => refreshAdmin(),
+    );
   }
 
   Future<Position> _currentPosition() async {
@@ -375,20 +395,34 @@ Future<bool> login(
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
       throw StateError('Location permission was denied.');
     }
-    return Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
+    return Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+    );
   }
 
   Future<void> _pushDriverLocation(Position position) async {
-    await _repository.updateDriverLocation(driverToken!, position.latitude, position.longitude, position.accuracy);
+    await _repository.updateDriverLocation(
+      driverToken!,
+      position.latitude,
+      position.longitude,
+      position.accuracy,
+    );
     _lastDriverPush = DateTime.now();
-    driverPhoneLocation = Coordinate(lat: position.latitude, lng: position.longitude);
+    driverPhoneLocation = Coordinate(
+      lat: position.latitude,
+      lng: position.longitude,
+    );
   }
 
-  Future<bool> _mutate(String action, Future<MutationResult> Function() callback) async {
-    return _guard(action, () async {
+  Future<void> _mutate(
+    String action,
+    Future<MutationResult> Function() callback,
+  ) async {
+    await _guard(action, () async {
       final result = await callback();
       successMessage = result.message;
       await Future.wait([refreshPublic(), refreshDriver(), refreshAdmin()]);
@@ -403,11 +437,6 @@ Future<bool> login(
       await callback();
       return true;
     } catch (error) {
-      if (error is ApiUnauthorizedException) {
-        final role = selectedRole == UserRole.admin ? UserRole.admin : UserRole.driver;
-        await _expireSession(role, error.message);
-        return false;
-      }
       errorMessage = _readableError(error);
       return false;
     } finally {
@@ -416,27 +445,11 @@ Future<bool> login(
     }
   }
 
-  Future<void> _expireSession(UserRole role, String message) async {
-    if (role == UserRole.driver) {
-      await _tokenStore.clearDriverToken();
-      await _driverLocationSubscription?.cancel();
-      driverToken = null;
-      driverUser = null;
-      driverDashboard = null;
-    } else if (role == UserRole.admin) {
-      await _tokenStore.clearAdminToken();
-      adminToken = null;
-      adminUser = null;
-      adminOverview = null;
-    }
-    selectedRole = role;
-    authRedirectRole = role;
-    errorMessage = message.isEmpty ? 'Session expired. Please log in again.' : message;
-    notifyListeners();
-  }
-
   String _readableError(Object error) {
-    final message = error.toString().replaceFirst('Exception: ', '').replaceFirst('Bad state: ', '');
+    final message = error
+        .toString()
+        .replaceFirst('Exception: ', '')
+        .replaceFirst('Bad state: ', '');
     return message.isEmpty ? 'Request failed.' : message;
   }
 

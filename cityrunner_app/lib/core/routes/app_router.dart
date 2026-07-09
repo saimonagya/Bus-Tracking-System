@@ -27,8 +27,6 @@ class AppRoutes {
 class AppRouter {
   const AppRouter._();
 
-  static final navigatorKey = GlobalKey<NavigatorState>();
-
   static Route<dynamic> onGenerateRoute(RouteSettings settings) {
     return MaterialPageRoute<void>(
       settings: settings,

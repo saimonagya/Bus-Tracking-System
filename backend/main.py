@@ -121,6 +121,7 @@ def create_bus_bundle(db: Session, name: str, registration_number: str, route_na
     return bus
 
 
+
 def ensure_seed_data() -> None:
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
